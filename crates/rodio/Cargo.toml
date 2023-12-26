@@ -1,0 +1,19 @@
+[package]
+name = "assets_manager-rodio"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+flac = ["rodio/flac"]
+minimp3 = ["rodio/minimp3"]
+vorbis = ["rodio/vorbis"]
+wav = ["rodio/wav"]
+
+symphonia-flac = ["rodio/symphonia-flac"]
+symphonia-mp3 = ["rodio/symphonia-mp3"]
+symphonia-vorbis = ["rodio/symphonia-vorbis"]
+symphonia-wav = ["rodio/symphonia-wav"]
+
+[dependencies]
+assets_manager = { path = "../..", default-features = false }
+rodio = { version = "0.17", default-features = false }
