@@ -159,6 +159,16 @@ impl CacheEntry {
         CacheEntry(Box::new(Entry { id, type_id, kind }))
     }
 
+    #[inline]
+    pub(crate) fn id(&self) -> &SharedString {
+        &self.0.id
+    }
+
+    #[inline]
+    pub(crate) fn as_key(&self) -> (TypeId, &str) {
+        (self.0.type_id, &self.0.id)
+    }
+
     /// Returns a reference on the inner storage of the entry.
     #[inline]
     pub(crate) fn inner(&self) -> &UntypedHandle {
@@ -176,9 +186,27 @@ impl CacheEntry {
     }
 }
 
+impl PartialEq for CacheEntry {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_key() == other.as_key()
+    }
+}
+
+impl Eq for CacheEntry {}
+
+impl std::hash::Hash for CacheEntry {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_key().hash(state)
+    }
+}
+
 impl fmt::Debug for CacheEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CacheEntry").finish()
+        f.debug_struct("CacheEntry")
+            .field("type_id", &self.0.type_id)
+            .finish()
     }
 }
 

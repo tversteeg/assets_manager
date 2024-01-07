@@ -5,8 +5,8 @@ use crate::{
     asset::{DirLoadable, Storable},
     entry::{CacheEntry, UntypedHandle},
     source::{FileSystem, Source},
-    utils::{BorrowedKey, HashMap, Key, OwnedKey, RandomState, RwLock},
-    AnyCache, Compound, Error, Handle, SharedString,
+    utils::{RandomState, RwLock},
+    AnyCache, Compound, Error, Handle,
 };
 
 #[cfg(doc)]
@@ -19,7 +19,7 @@ use crate::hot_reloading::{records, HotReloader};
 
 // Make shards go to different cache lines to reduce contention
 #[repr(align(64))]
-struct Shard(RwLock<HashMap<OwnedKey, CacheEntry>>);
+struct Shard(RwLock<crate::map::AssetMap>);
 
 /// A map to store assets, optimized for concurrency.
 ///
@@ -45,7 +45,7 @@ impl AssetMap {
 
         let hash_builder = RandomState::new();
         let shards = (0..shards)
-            .map(|_| Shard(RwLock::new(HashMap::with_hasher(hash_builder.clone()))))
+            .map(|_| Shard(RwLock::new(crate::map::AssetMap::new())))
             .collect();
 
         AssetMap {
@@ -54,27 +54,27 @@ impl AssetMap {
         }
     }
 
-    fn get_shard(&self, key: BorrowedKey) -> &Shard {
+    fn hash_one(&self, key: (TypeId, &str)) -> u64 {
         use std::hash::*;
 
         let mut hasher = self.hash_builder.build_hasher();
         key.hash(&mut hasher);
-        let id = (hasher.finish() as usize) & (self.shards.len() - 1);
+        hasher.finish()
+    }
+
+    fn get_shard(&self, hash: u64) -> &Shard {
+        let id = (hash as usize) & (self.shards.len() - 1);
         &self.shards[id]
     }
 
-    fn get_shard_mut(&mut self, key: BorrowedKey) -> &mut Shard {
-        use std::hash::*;
-
-        let mut hasher = self.hash_builder.build_hasher();
-        key.hash(&mut hasher);
-        let id = (hasher.finish() as usize) & (self.shards.len() - 1);
+    fn get_shard_mut(&mut self, hash: u64) -> &mut Shard {
+        let id = (hash as usize) & (self.shards.len() - 1);
         &mut self.shards[id]
     }
 
     fn take(&mut self, id: &str, type_id: TypeId) -> Option<CacheEntry> {
-        let key = BorrowedKey::new_with(id, type_id);
-        self.get_shard_mut(key).0.get_mut().remove(&key as &dyn Key)
+        let hash = self.hash_one((type_id, id));
+        self.get_shard_mut(hash).0.get_mut().take(hash, id, type_id)
     }
 
     #[inline]
@@ -91,23 +91,23 @@ impl AssetMap {
 
 impl crate::anycache::AssetMap for AssetMap {
     fn get(&self, id: &str, type_id: TypeId) -> Option<&UntypedHandle> {
-        let key = BorrowedKey::new_with(id, type_id);
-        let shard = self.get_shard(key).0.read();
-        let entry = shard.get(&key as &dyn Key)?;
-        unsafe { Some(entry.inner().extend_lifetime()) }
+        let hash = self.hash_one((type_id, id));
+        let shard = self.get_shard(hash).0.read();
+        let entry = shard.get(hash, id, type_id)?;
+        unsafe { Some(entry.extend_lifetime()) }
     }
 
-    fn insert(&self, id: SharedString, type_id: TypeId, entry: CacheEntry) -> &UntypedHandle {
-        let key = OwnedKey::new_with(id, type_id);
-        let shard = &mut *self.get_shard(key.borrow()).0.write();
-        let entry = shard.entry(key).or_insert(entry);
-        unsafe { entry.inner().extend_lifetime() }
+    fn insert(&self, entry: CacheEntry) -> &UntypedHandle {
+        let hash = self.hash_one(entry.as_key());
+        let shard = &mut *self.get_shard(hash).0.write();
+        let entry = shard.insert(hash, entry, &self.hash_builder);
+        unsafe { entry.extend_lifetime() }
     }
 
     fn contains_key(&self, id: &str, type_id: TypeId) -> bool {
-        let key = BorrowedKey::new_with(id, type_id);
-        let shard = self.get_shard(key).0.read();
-        shard.contains_key(&key as &dyn Key)
+        let hash = self.hash_one((type_id, id));
+        let shard = self.get_shard(hash).0.read();
+        shard.contains_key(hash, id, type_id)
     }
 }
 
@@ -116,7 +116,7 @@ impl fmt::Debug for AssetMap {
         let mut map = f.debug_map();
 
         for shard in &*self.shards {
-            map.entries(&**shard.0.read());
+            map.entries(shard.0.read().iter_for_debug());
         }
 
         map.finish()
